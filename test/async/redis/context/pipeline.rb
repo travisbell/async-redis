@@ -7,6 +7,7 @@
 require "async/redis/client"
 require "async/redis/context/pipeline"
 require "sus/fixtures/async"
+require "securerandom"
 
 describe Async::Redis::Context::Pipeline do
 	include Sus::Fixtures::Async::ReactorContext
@@ -51,6 +52,37 @@ describe Async::Redis::Context::Pipeline do
 			expect(pipeline.collect).to be == pairs.values
 		ensure
 			pipeline.close
+		end
+	end
+	
+	with "an interrupted pipeline" do
+		# Use a single connection so that any reuse is observable:
+		let(:client) {Async::Redis::Client.new(endpoint, limit: 1)}
+		let(:other) {Async::Redis::Client.new(endpoint)}
+		let(:key) {"async-redis:test:#{SecureRandom.uuid}:list"}
+		
+		it "does not reuse the connection" do
+			# Establish the connection so that the request is sent without yielding:
+			client.call("PING")
+			
+			task = Async do
+				client.pipeline do |context|
+					context.call("BLPOP", key, 1)
+					context.collect
+				end
+			end
+			
+			# Stop the pipeline while it is waiting for a response:
+			task.stop
+			
+			# The response to the interrupted request is sent to its connection:
+			other.call("RPUSH", key, "stale")
+			
+			expect(client.call("PING")).to be == "PONG"
+		ensure
+			other.call("DEL", key)
+			other.close
+			client.close
 		end
 	end
 end

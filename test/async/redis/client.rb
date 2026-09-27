@@ -111,4 +111,31 @@ describe Async::Redis::Client do
 		expect(unix_endpoint.url.scheme).to be == "redis"
 		expect(unix_endpoint.url.path).to be == "/tmp/redis.sock"
 	end
+	
+	with "an interrupted request" do
+		# Use a single connection so that any reuse is observable:
+		let(:client) {Async::Redis::Client.new(endpoint, limit: 1)}
+		let(:other) {Async::Redis::Client.new(endpoint)}
+		
+		it "does not reuse the connection" do
+			# Establish the connection so that the request is sent without yielding:
+			client.call("PING")
+			
+			task = Async do
+				client.call("BLPOP", list_key, 1)
+			end
+			
+			# Stop the request while it is waiting for a response:
+			task.stop
+			
+			# The response to the interrupted request is sent to its connection:
+			other.call("RPUSH", list_key, "stale")
+			
+			expect(client.call("PING")).to be == "PONG"
+		ensure
+			other.call("DEL", list_key)
+			other.close
+			client.close
+		end
+	end
 end
