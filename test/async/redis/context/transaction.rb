@@ -61,6 +61,25 @@ describe Async::Redis::Context::Transaction do
 				expect(client.get(key)).to be == value
 			end
 		end
+		
+		with "an exception before executing" do
+			# Use a single connection so that any reuse is observable:
+			let(:client) {@client = Async::Redis::Client.new(endpoint, limit: 1)}
+			let(:key) {root[:thing]}
+			
+			it "does not leave the connection in a transaction" do
+				expect do
+					client.transaction do |context|
+						context.multi
+						context.set key, value
+						
+						raise ArgumentError, "Boom!"
+					end
+				end.to raise_exception(ArgumentError)
+				
+				expect(client.get(key)).to be_nil
+			end
+		end
 	end
 	
 	describe "#discard" do
